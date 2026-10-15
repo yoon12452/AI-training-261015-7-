@@ -1,0 +1,239 @@
+<script>
+(function(){
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const state = {orders:[], processes:[], history:[], settings:{}, serverDate:"", userEmail:"", currentDetail:null, currentView:"dashboard", report:null};
+  const STATUS_CLASS = {"접수 대기":"status-wait","작업 진행 중":"status-progress","품질검사":"status-qc","출고 완료":"status-done","보류":"status-hold"};
+  const PROCESS_CLASS = {"대기":"status-wait","진행 중":"status-progress","완료":"status-done","생략":"status-hold"};
+  const PROCESS_OPTIONS = ["대기","진행 중","완료","생략"];
+  const PAGE_TITLES = {dashboard:"대시보드",orders:"작업 의뢰 관리",processes:"제작 공정",schedule:"납기 및 일정",reports:"통계 및 보고서"};
+
+  document.addEventListener("DOMContentLoaded", init);
+
+  function init(){
+    document.querySelectorAll(".nav-item").forEach(btn=>btn.addEventListener("click",()=>navigate(btn.dataset.view)));
+    document.querySelectorAll("[data-go]").forEach(btn=>btn.addEventListener("click",()=>navigate(btn.dataset.go)));
+    $("newOrderTop").addEventListener("click",()=>openOrderModal());
+    $("newOrderPage").addEventListener("click",()=>openOrderModal());
+    $("refreshBtn").addEventListener("click",loadData);
+    $("dashboardRefresh").addEventListener("click",loadData);
+    $("mobileMenu").addEventListener("click",()=>$("sidebar").classList.toggle("open"));
+    $("globalSearch").addEventListener("keydown",e=>{if(e.key==="Enter"){ $("orderSearch").value=e.target.value; navigate("orders"); renderOrders(); }});
+    ["orderSearch","filterStatus","filterRestoration","filterTechnician","filterDueFrom","filterDueTo","hideSamples"].forEach(id=>$(id).addEventListener("input",renderOrders));
+    $("clearFilters").addEventListener("click",clearFilters);
+    ["processSearch","processStatusFilter","processTechFilter"].forEach(id=>$(id).addEventListener("input",renderProcesses));
+    $("scheduleDate").addEventListener("change",renderSchedule);
+    $("scheduleScope").addEventListener("change",renderSchedule);
+    $("exportOrders").addEventListener("click",exportOrders);
+    $("exportReport").addEventListener("click",exportReport);
+    $("closeModal").addEventListener("click",closeOrderModal);
+    $("cancelModal").addEventListener("click",closeOrderModal);
+    $("orderModal").addEventListener("click",e=>{if(e.target===$("orderModal"))closeOrderModal();});
+    $("orderForm").addEventListener("submit",submitOrder);
+    $("closeDetail").addEventListener("click",closeDetail);
+    $("detailClose").addEventListener("click",closeDetail);
+    $("detailEdit").addEventListener("click",()=>{const o=state.currentDetail;if(o){closeDetail();openOrderModal(o);}});
+    $("detailModal").addEventListener("click",e=>{if(e.target===$("detailModal"))closeDetail();});
+    loadData();
+  }
+
+  function serverCall(name,...args){
+    return new Promise((resolve,reject)=>{
+      if(typeof google === "undefined" || !google.script || !google.script.run){reject(new Error("Apps Script 서버 연결을 찾을 수 없습니다."));return;}
+      google.script.run.withSuccessHandler(resolve).withFailureHandler(err=>reject(new Error(err&&err.message?err.message:String(err))))[name](...args);
+    });
+  }
+  async function loadData(){
+    $("loadingState").hidden=false;$("appContent").hidden=true;
+    try{
+      const data=await serverCall("getAppData");
+      state.orders=data.orders||[];state.processes=data.processes||[];state.history=data.history||[];state.settings=data.settings||{};state.serverDate=data.serverDate||todayISO();state.userEmail=data.userEmail||"미확인";
+      $("userEmail").textContent=state.userEmail;$("todayLabel").textContent=formatDate(state.serverDate);
+      $("scheduleDate").value=$("scheduleDate").value||state.serverDate;
+      populateTechnicianFilters();renderAll();
+      $("loadingState").hidden=true;$("appContent").hidden=false;
+    }catch(err){
+      $("loadingState").innerHTML='<div class="empty-icon">⚠</div><strong>데이터를 불러오지 못했습니다</strong><span>'+esc(err.message)+'</span><button class="secondary-button" id="retryLoad">다시 시도</button>';
+      $("retryLoad").addEventListener("click",loadData);
+    }
+  }
+  function renderAll(){renderDashboard();renderOrders();renderProcesses();renderSchedule();renderReports();}
+  function navigate(view){
+    if(!PAGE_TITLES[view])return;
+    state.currentView=view;
+    document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id==="view-"+view));
+    document.querySelectorAll(".nav-item").forEach(v=>v.classList.toggle("active",v.dataset.view===view));
+    $("pageTitle").textContent=PAGE_TITLES[view];$("sidebar").classList.remove("open");
+    if(view==="reports")renderReports();
+  }
+  function ordersWithoutSamples(){return state.orders.filter(o=>!isSample(o));}
+  function activeOrders(){return state.orders.filter(o=>o.status!=="출고 완료"&&o.status!=="보류");}
+  function isSample(o){return o.isSample===true||String(o.isSample).toLowerCase()==="true"||String(o.orderId||"").startsWith("DF-DEMO-");}
+  function isDelayed(o){return o.status!=="출고 완료"&&o.status!=="보류"&&o.dueDate&&dateOnly(o.dueDate)<state.serverDate;}
+  function daysUntil(d){if(!d)return null;return Math.round((new Date(dateOnly(d)+"T00:00:00")-new Date(state.serverDate+"T00:00:00"))/86400000);}
+  function isSoon(o){const n=daysUntil(o.dueDate);return o.status!=="출고 완료"&&o.status!=="보류"&&n!==null&&n>=0&&n<=2;}
+  function dateOnly(v){return String(v||"").slice(0,10);}
+  function todayISO(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
+  function formatDate(v){if(!v)return"-";const p=dateOnly(v).split("-");return p.length===3?p[0]+"."+p[1]+"."+p[2]:String(v);}
+  function formatDateTime(v){if(!v)return"-";const d=new Date(v);return isNaN(d.getTime())?formatDate(v):d.toLocaleString("ko-KR",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});}
+  function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+  function statusBadge(status){return '<span class="status-badge '+(STATUS_CLASS[status]||"status-wait")+'">'+esc(status||"미지정")+'</span>';}
+  function processBadge(status){return '<span class="status-badge '+(PROCESS_CLASS[status]||"status-wait")+'">'+esc(status||"대기")+'</span>';}
+  function empty(title,desc){return '<div class="empty-state"><div class="empty-icon">◇</div><strong>'+esc(title)+'</strong><span>'+esc(desc)+'</span></div>';}
+  function toast(message,type="success"){const el=document.createElement("div");el.className="toast "+type;el.textContent=message;$("toastRegion").appendChild(el);setTimeout(()=>el.remove(),3600);}
+  function populateTechnicianFilters(){
+    const names=[...new Set(state.orders.map(o=>o.technician).filter(Boolean))].sort();
+    [["filterTechnician","모든 담당자"],["processTechFilter","모든 담당자"]].forEach(([id,placeholder])=>{
+      const select=$(id),old=select.value;select.innerHTML='<option value="">'+placeholder+'</option>'+names.map(n=>'<option value="'+esc(n)+'">'+esc(n)+'</option>').join("");select.value=old;
+    });
+  }
+  function renderDashboard(){
+    const all=state.orders,active=activeOrders(),delayed=all.filter(isDelayed),dueToday=active.filter(o=>dateOnly(o.dueDate)===state.serverDate),qc=all.filter(o=>o.status==="품질검사"),done=all.filter(o=>o.status==="출고 완료");
+    const cards=[
+      ["전체 의뢰",all.length,"등록된 전체 작업","blue","▤"],
+      ["작업 진행 중",all.filter(o=>o.status==="작업 진행 중").length,"제작 공정 진행","orange","◷"],
+      ["품질검사",qc.length,"최종 검사 대기 및 진행","purple","✓"],
+      ["출고 완료",done.length,"출고 완료된 의뢰","green","↗"]
+    ];
+    $("statCards").innerHTML=cards.map(c=>'<article class="stat-card"><div class="stat-top"><span class="stat-label">'+c[0]+'</span><span class="stat-icon '+c[3]+'">'+c[4]+'</span></div><div class="stat-number">'+c[1]+'</div><div class="stat-foot">'+c[2]+'</div></article>').join("");
+    const processMap={};state.processes.forEach(p=>{if(!processMap[p.name])processMap[p.name]={total:0,done:0};processMap[p.name].total++;if(p.status==="완료"||p.status==="생략")processMap[p.name].done++;});
+    const topProcesses=Object.entries(processMap).sort((a,b)=>a[1].total-b[1].total).slice(0,7);
+    $("processOverview").innerHTML=topProcesses.length?topProcesses.map(([name,v])=>'<div class="process-line"><span class="process-line-name">'+esc(name)+'</span><div class="progress-track"><div class="progress-fill" style="width:'+(v.total?Math.round(v.done/v.total*100):0)+'%"></div></div><span class="process-line-value">'+(v.total?Math.round(v.done/v.total*100):0)+'%</span></div>').join(""):empty("공정 데이터가 없습니다","의뢰를 등록하면 공정별 현황이 표시됩니다.");
+    const dues=active.filter(o=>isDelayed(o)||isSoon(o)).sort((a,b)=>dateOnly(a.dueDate).localeCompare(dateOnly(b.dueDate))).slice(0,5);
+    $("dueCount").textContent=delayed.length+"건 지연";
+    $("dueList").innerHTML=dues.length?dues.map(o=>'<div class="compact-item"><div class="due-indicator '+(isDelayed(o)?"late":"")+'"></div><div class="compact-main"><strong>'+esc(o.clinic)+' · '+esc(o.restoration)+'</strong><span>'+esc(o.orderId)+' · '+esc(o.technician||"담당자 미지정")+'</span></div><div class="compact-date '+(isDelayed(o)?"late":"")+'">'+(isDelayed(o)?"지연":daysUntil(o.dueDate)===0?"오늘 마감":daysUntil(o.dueDate)+"일 후")+'<br>'+formatDate(o.dueDate)+'</div></div>').join(""):empty("주의할 납기 작업이 없습니다","지연 또는 2일 이내 마감 작업이 없습니다.");
+    const recent=[...all].sort((a,b)=>String(b.createdAt||"").localeCompare(String(a.createdAt||""))).slice(0,5);
+    $("recentOrders").innerHTML=recent.length?simpleOrdersTable(recent):empty("등록된 의뢰가 없습니다","신규 의뢰를 등록해 시작하세요.");
+    $("recentHistory").innerHTML=state.history.length?state.history.slice(0,6).map(h=>'<div class="timeline-item"><div class="timeline-dot"></div><div class="timeline-content"><strong>'+esc(h.orderId)+' · '+esc(h.field)+'</strong><p>'+esc(h.beforeValue||"—")+' → '+esc(h.afterValue||"—")+'</p><time>'+formatDateTime(h.changedAt)+' · '+esc(h.actor||"")+'</time></div></div>').join(""):empty("변경 이력이 없습니다","작업 변경 내역이 여기에 표시됩니다.");
+  }
+  function simpleOrdersTable(orders){
+    return '<table><thead><tr><th>의뢰번호 / 치과</th><th>납기일</th><th>상태</th></tr></thead><tbody>'+orders.map(o=>'<tr><td><div class="clinic-cell"><button class="order-link" data-detail="'+esc(o.orderId)+'">'+esc(o.orderId)+'</button><span>'+esc(o.clinic)+'</span></div></td><td>'+formatDate(o.dueDate)+'</td><td>'+statusBadge(o.status)+'</td></tr>').join("")+'</tbody></table>';
+  }
+  function renderOrders(){
+    const q=$("orderSearch").value.trim().toLowerCase(),status=$("filterStatus").value,rest=$("filterRestoration").value,tech=$("filterTechnician").value,from=$("filterDueFrom").value,to=$("filterDueTo").value,hide=$("hideSamples").checked;
+    let list=state.orders.filter(o=>{
+      if(hide&&isSample(o))return false;
+      if(q&&![o.orderId,o.clinic,o.tooth,o.restoration].some(v=>String(v||"").toLowerCase().includes(q)))return false;
+      if(status&&o.status!==status)return false;if(rest&&o.restoration!==rest)return false;if(tech&&o.technician!==tech)return false;
+      if(from&&dateOnly(o.dueDate)<from)return false;if(to&&dateOnly(o.dueDate)>to)return false;return true;
+    }).sort((a,b)=>dateOnly(a.dueDate).localeCompare(dateOnly(b.dueDate)));
+    $("orderCount").textContent=list.length+"건";
+    $("ordersTable").innerHTML=list.length?'<table><thead><tr><th>의뢰번호</th><th>거래 치과 / 보철물</th><th>재료</th><th>담당자</th><th>접수일</th><th>납기일</th><th>우선순위</th><th>상태</th><th>관리</th></tr></thead><tbody>'+list.map(o=>'<tr><td><button class="order-link" data-detail="'+esc(o.orderId)+'">'+esc(o.orderId)+'</button>'+(isSample(o)?'<div><span class="soft-badge info">샘플</span></div>':'')+'</td><td><div class="clinic-cell"><strong>'+esc(o.clinic)+'</strong><span>'+esc(o.restoration)+' · '+esc(o.tooth||"범위 미입력")+'</span></div></td><td>'+esc(o.material)+'</td><td>'+esc(o.technician||"-")+'</td><td>'+formatDate(o.receivedDate)+'</td><td><span style="color:'+(isDelayed(o)?"#c54444":"inherit")+';font-weight:'+(isDelayed(o)?"700":"400")+'">'+formatDate(o.dueDate)+(isDelayed(o)?' <small>지연</small>':"")+'</span></td><td><span class="priority priority-'+esc(o.priority)+'">'+esc(o.priority||"보통")+'</span></td><td><select class="inline-status" data-status-order="'+esc(o.orderId)+'" aria-label="작업 상태 변경">'+["접수 대기","작업 진행 중","품질검사","출고 완료","보류"].map(s=>'<option '+(s===o.status?"selected":"")+'>'+s+'</option>').join("")+'</select></td><td><div class="table-actions"><button class="mini-action" data-edit="'+esc(o.orderId)+'">수정</button><button class="mini-action danger" data-delete="'+esc(o.orderId)+'">삭제</button></div></td></tr>').join("")+'</tbody></table>':empty("조건에 맞는 의뢰가 없습니다","검색 조건을 변경하거나 신규 의뢰를 등록하세요.");
+  }
+  function clearFilters(){["orderSearch","filterStatus","filterRestoration","filterTechnician","filterDueFrom","filterDueTo"].forEach(id=>$(id).value="");$("hideSamples").checked=false;renderOrders();}
+  function renderProcesses(){
+    const q=$("processSearch").value.trim().toLowerCase(),status=$("processStatusFilter").value,tech=$("processTechFilter").value;
+    const orderMap=Object.fromEntries(state.orders.map(o=>[o.orderId,o]));
+    const orders=state.orders.filter(o=>{
+      const ps=state.processes.filter(p=>String(p.orderId)===String(o.orderId));
+      if(q&&![o.orderId,o.clinic,o.restoration,...ps.map(p=>p.name)].some(v=>String(v||"").toLowerCase().includes(q)))return false;
+      if(tech&&!ps.some(p=>(p.technician||o.technician)===tech))return false;
+      if(status&&!ps.some(p=>p.status===status))return false;
+      return ps.length>0;
+    }).sort((a,b)=>dateOnly(a.dueDate).localeCompare(dateOnly(b.dueDate)));
+    $("processBoard").innerHTML=orders.length?orders.map(o=>{
+      const ps=state.processes.filter(p=>String(p.orderId)===String(o.orderId)).sort((a,b)=>Number(a.sequence)-Number(b.sequence));
+      const done=ps.filter(p=>p.status==="완료"||p.status==="생략").length,percent=Math.round(done/ps.length*100);
+      return '<article class="process-order-card"><div class="process-card-head"><div><strong>'+esc(o.orderId)+' · '+esc(o.clinic)+'</strong><span>'+esc(o.restoration)+' / '+esc(o.material)+' · 납기 '+formatDate(o.dueDate)+'</span></div><span class="soft-badge '+(isDelayed(o)?"warning":"info")+'">'+(isDelayed(o)?"납기 지연":percent+"% 완료")+'</span></div><div class="process-steps">'+ps.map((p,i)=>'<div class="process-step"><div class="step-index '+(p.status==="완료"||p.status==="생략"?"complete":p.status==="진행 중"?"active":"")+'">'+(p.status==="완료"?"✓":i+1)+'</div><div class="step-info"><strong>'+esc(p.name)+'</strong><span>'+esc(p.technician||o.technician||"담당자 미지정")+'</span></div><select data-process="'+esc(p.processId)+'" data-process-tech="'+esc(p.technician||o.technician||"")+'" aria-label="'+esc(p.name)+' 상태 변경">'+PROCESS_OPTIONS.map(s=>'<option '+(s===p.status?"selected":"")+'>'+s+'</option>').join("")+'</select></div>').join("")+'</div></article>';
+    }).join(""):empty("표시할 공정이 없습니다","의뢰를 등록하면 공정 카드가 생성됩니다.");
+  }
+  function renderSchedule(){
+    const date=$("scheduleDate").value||state.serverDate,scope=$("scheduleScope").value;
+    const active=activeOrders(),today=active.filter(o=>dateOnly(o.dueDate)===date),late=active.filter(isDelayed),soon=active.filter(o=>{const n=daysUntil(o.dueDate);return n!==null&&n>=0&&n<=2;});
+    $("scheduleSummary").innerHTML='<div class="schedule-chip"><span>선택 날짜 마감</span><strong>'+today.length+'<small>건</small></strong></div><div class="schedule-chip danger"><span>납기 지연</span><strong>'+late.length+'<small>건</small></strong></div><div class="schedule-chip warn"><span>2일 이내 마감</span><strong>'+soon.length+'<small>건</small></strong></div><div class="schedule-chip"><span>미출고 작업</span><strong>'+active.length+'<small>건</small></strong></div>';
+    let list=active;
+    if(scope==="today")list=active.filter(o=>dateOnly(o.dueDate)===date);
+    if(scope==="overdue")list=late;
+    if(scope==="soon")list=soon;
+    list=list.slice().sort((a,b)=>dateOnly(a.dueDate).localeCompare(dateOnly(b.dueDate)));
+    $("scheduleCount").textContent=list.length+"건";
+    $("scheduleTable").innerHTML=list.length?'<table><thead><tr><th>의뢰번호</th><th>거래 치과</th><th>보철물</th><th>담당자</th><th>납기일</th><th>남은 기간</th><th>상태</th></tr></thead><tbody>'+list.map(o=>{const n=daysUntil(o.dueDate);return '<tr><td><button class="order-link" data-detail="'+esc(o.orderId)+'">'+esc(o.orderId)+'</button></td><td>'+esc(o.clinic)+'</td><td>'+esc(o.restoration)+' / '+esc(o.material)+'</td><td>'+esc(o.technician||"-")+'</td><td>'+formatDate(o.dueDate)+'</td><td><span style="color:'+(n<0?"#c54444":n===0?"#b7771e":"#63778c")+';font-weight:600">'+(n<0?Math.abs(n)+"일 지연":n===0?"오늘 마감":n+"일 남음")+'</span></td><td>'+statusBadge(o.status)+'</td></tr>';}).join("")+'</tbody></table>':empty("해당 조건의 작업이 없습니다","날짜 또는 일정 필터를 변경해 보세요.");
+  }
+  async function renderReports(){
+    try{
+      const r=await serverCall("getReportData");state.report=r;
+      $("reportStats").innerHTML=[
+        ["전체 의뢰",r.total,"blue","▤"],["납기 지연",r.delayed,"orange","!"],["납기 준수율",r.onTimeRate+"%","green","✓"],["공정 종류",r.processStats.length,"purple","◷"]
+      ].map(c=>'<article class="stat-card"><div class="stat-top"><span class="stat-label">'+c[0]+'</span><span class="stat-icon '+c[2]+'">'+c[3]+'</span></div><div class="stat-number">'+c[1]+'</div><div class="stat-foot">현재 저장 데이터 기준</div></article>').join("");
+      const counts=r.statusCounts||{},max=Math.max(1,...Object.values(counts));
+      $("statusChart").innerHTML=Object.entries(counts).map(([name,n])=>'<div class="bar-row"><span class="bar-label">'+esc(name)+'</span><div class="bar-track"><div class="bar-fill" style="width:'+(n/max*100)+'%"></div></div><span class="bar-value">'+n+'</span></div>').join("");
+      $("techReport").innerHTML=r.technicianStats.length?'<table><thead><tr><th>담당자</th><th>전체</th><th>진행</th><th>완료</th><th>지연</th></tr></thead><tbody>'+r.technicianStats.map(t=>'<tr><td>'+esc(t.technician)+'</td><td>'+t.total+'</td><td>'+t.active+'</td><td>'+t.completed+'</td><td style="color:'+(t.delayed?"#c54444":"inherit")+'">'+t.delayed+'</td></tr>').join("")+'</tbody></table>':empty("담당자 데이터가 없습니다","의뢰를 등록하면 통계가 표시됩니다.");
+      $("processReport").innerHTML=r.processStats.length?'<table><thead><tr><th>공정</th><th>대기</th><th>진행 중</th><th>완료</th><th>생략</th></tr></thead><tbody>'+r.processStats.map(p=>'<tr><td>'+esc(p.name)+'</td><td>'+p.pending+'</td><td>'+p.active+'</td><td>'+p.complete+'</td><td>'+p.skipped+'</td></tr>').join("")+'</tbody></table>':empty("공정 데이터가 없습니다","공정이 생성되면 통계가 표시됩니다.");
+    }catch(e){$("reportStats").innerHTML=empty("통계를 불러오지 못했습니다",e.message);}
+  }
+  function openOrderModal(order){
+    $("orderForm").reset();$("fOrderId").value=order?order.orderId:"";
+    $("modalTitle").textContent=order?"의뢰 정보 수정":"신규 의뢰 등록";
+    $("fClinic").value=order?order.clinic:"";$("fRestoration").value=order?order.restoration:"";$("fMaterial").value=order?order.material:"";
+    $("fTooth").value=order?order.tooth:"";$("fTechnician").value=order?order.technician:"";$("fPriority").value=order?order.priority||"보통":"보통";
+    $("fReceived").value=order?dateOnly(order.receivedDate):state.serverDate||todayISO();$("fDue").value=order?dateOnly(order.dueDate):state.serverDate||todayISO();
+    $("fStatus").value=order?order.status:"접수 대기";$("fNotes").value=order?order.notes:"";
+    $("orderModal").hidden=false;setTimeout(()=>$("fClinic").focus(),50);
+  }
+  function closeOrderModal(){$("orderModal").hidden=true;}
+  async function submitOrder(e){
+    e.preventDefault();const btn=$("saveOrderBtn");btn.disabled=true;btn.textContent="저장 중…";
+    const payload={orderId:$("fOrderId").value,clinic:$("fClinic").value,restoration:$("fRestoration").value,material:$("fMaterial").value,tooth:$("fTooth").value,technician:$("fTechnician").value,priority:$("fPriority").value,receivedDate:$("fReceived").value,dueDate:$("fDue").value,status:$("fStatus").value,notes:$("fNotes").value};
+    try{const res=await serverCall("saveOrder",payload);closeOrderModal();toast(res.message);await loadData();}
+    catch(err){toast(err.message,"error");}
+    finally{btn.disabled=false;btn.textContent="저장하기";}
+  }
+  async function changeStatus(orderId,status){
+    try{const res=await serverCall("updateOrderStatus",orderId,status);toast(res.message);await loadData();}
+    catch(e){toast(e.message,"error");await loadData();}
+  }
+  async function changeProcess(processId,status,technician){
+    try{const res=await serverCall("updateProcess",{processId,status,technician});toast(res.message);await loadData();}
+    catch(e){toast(e.message,"error");await loadData();}
+  }
+  async function deleteOrder(orderId){
+    const order=state.orders.find(o=>o.orderId===orderId);if(!order)return;
+    if(!confirm(orderId+" 의뢰를 삭제할까요?\n연결된 공정 데이터도 함께 삭제됩니다. 이 작업은 되돌릴 수 없습니다."))return;
+    try{const res=await serverCall("deleteOrder",orderId);toast(res.message);await loadData();}
+    catch(e){toast(e.message,"error");}
+  }
+  function openDetail(orderId){
+    const o=state.orders.find(v=>v.orderId===orderId);if(!o)return;
+    state.currentDetail=o;const ps=state.processes.filter(p=>String(p.orderId)===String(orderId)).sort((a,b)=>Number(a.sequence)-Number(b.sequence));
+    const done=ps.filter(p=>p.status==="완료"||p.status==="생략").length,percent=ps.length?Math.round(done/ps.length*100):0;
+    $("detailTitle").textContent=o.orderId;$("detailSubtitle").textContent=o.clinic+" · "+o.restoration;
+    $("detailBody").innerHTML='<div class="detail-progress"><div class="detail-progress-head"><span>제작 진행률</span><strong>'+percent+'% ('+done+'/'+ps.length+' 공정 완료)</strong></div><div class="progress-track"><div class="progress-fill" style="width:'+percent+'%"></div></div></div><div class="detail-fields">'+[
+      ["거래 치과",o.clinic],["보철물 / 재료",o.restoration+" / "+o.material],["치아 번호",o.tooth||"미입력"],["담당 기공사",o.technician||"미지정"],["접수일",formatDate(o.receivedDate)],["납기일",formatDate(o.dueDate)],["우선순위",o.priority||"보통"],["작업 상태",o.status],["데이터 구분",isSample(o)?"샘플 데이터":"실제 입력 데이터"]
+    ].map(p=>'<div class="detail-field"><span>'+p[0]+'</span><strong>'+esc(p[1])+'</strong></div>').join("")+'</div><div class="detail-note"><strong>작업 메모</strong><br>'+esc(o.notes||"등록된 메모가 없습니다.")+'</div><div class="detail-process-list"><h3>공정 진행 상태</h3>'+(ps.length?ps.map(p=>'<div class="detail-process-row"><span>'+esc(p.sequence)+'. '+esc(p.name)+' · '+esc(p.technician||o.technician||"담당자 미지정")+'</span>'+processBadge(p.status)+'</div>').join(""):empty("공정이 없습니다","공정 데이터가 생성되지 않았습니다."))+'</div>';
+    $("detailModal").hidden=false;
+  }
+  function closeDetail(){$("detailModal").hidden=true;state.currentDetail=null;}
+  function exportOrders(){
+    const q=$("orderSearch").value.trim().toLowerCase(),status=$("filterStatus").value,rest=$("filterRestoration").value,tech=$("filterTechnician").value,from=$("filterDueFrom").value,to=$("filterDueTo").value,hide=$("hideSamples").checked;
+    const list=state.orders.filter(o=>(!hide||!isSample(o))&&(!q||[o.orderId,o.clinic,o.tooth,o.restoration].some(v=>String(v||"").toLowerCase().includes(q)))&&(!status||o.status===status)&&(!rest||o.restoration===rest)&&(!tech||o.technician===tech)&&(!from||dateOnly(o.dueDate)>=from)&&(!to||dateOnly(o.dueDate)<=to));
+    const cols=[["의뢰번호","orderId"],["거래 치과","clinic"],["보철물","restoration"],["재료","material"],["치아 번호","tooth"],["담당 기공사","technician"],["접수일","receivedDate"],["납기일","dueDate"],["우선순위","priority"],["상태","status"],["메모","notes"],["샘플 여부","isSample"]];
+    downloadCsv("DentalFlow_orders_"+state.serverDate+".csv",cols,list);
+  }
+  function exportReport(){
+    if(!state.report){toast("통계 데이터가 아직 준비되지 않았습니다.","error");return;}
+    const rows=[];
+    rows.push(["구분","항목","건수","비고"]);
+    Object.entries(state.report.statusCounts).forEach(([k,v])=>rows.push(["상태별",k,v,""]));
+    state.report.technicianStats.forEach(t=>rows.push(["담당자",t.technician,t.total,"진행 "+t.active+", 완료 "+t.completed+", 지연 "+t.delayed]));
+    state.report.processStats.forEach(p=>rows.push(["공정",p.name,p.complete,"대기 "+p.pending+", 진행 "+p.active+", 생략 "+p.skipped]));
+    rows.push(["지표","납기 준수율",state.report.onTimeRate+"%","현재 집계 방식 기준"]);
+    downloadRawCsv("DentalFlow_report_"+state.serverDate+".csv",rows);
+  }
+  function downloadCsv(filename,cols,list){downloadRawCsv(filename,[cols.map(c=>c[0]),...list.map(o=>cols.map(c=>o[c[1]]))]);}
+  function downloadRawCsv(filename,rows){
+    const csv="\uFEFF"+rows.map(r=>r.map(v=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"').join(",")).join("\r\n");
+    const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}),url=URL.createObjectURL(blob),a=document.createElement("a");
+    a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+  }
+
+  document.addEventListener("click",e=>{
+    const detail=e.target.closest("[data-detail]");if(detail){openDetail(detail.dataset.detail);return;}
+    const edit=e.target.closest("[data-edit]");if(edit){const o=state.orders.find(v=>v.orderId===edit.dataset.edit);if(o)openOrderModal(o);return;}
+    const del=e.target.closest("[data-delete]");if(del){deleteOrder(del.dataset.delete);return;}
+  });
+  document.addEventListener("change",e=>{
+    const st=e.target.closest("[data-status-order]");if(st){changeStatus(st.dataset.statusOrder,st.value);return;}
+    const proc=e.target.closest("[data-process]");if(proc){changeProcess(proc.dataset.process,proc.value,proc.dataset.processTech);return;}
+  });
+})();
+</script>

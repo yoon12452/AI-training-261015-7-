@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark"><span class="material-symbol">✦</span></div>
+        <div><div class="brand-name">DentalFlow</div><div class="brand-sub">LAB WORKSPACE</div></div>
+      </div>
+      <div class="nav-caption">WORKSPACE</div>
+      <nav class="nav-list" aria-label="주 메뉴">
+        <button class="nav-item active" data-view="dashboard"><span class="nav-icon">▦</span>대시보드</button>
+        <button class="nav-item" data-view="orders"><span class="nav-icon">▤</span>작업 의뢰 관리</button>
+        <button class="nav-item" data-view="processes"><span class="nav-icon">◷</span>제작 공정</button>
+        <button class="nav-item" data-view="schedule"><span class="nav-icon">▦</span>납기 및 일정</button>
+        <button class="nav-item" data-view="reports"><span class="nav-icon">▥</span>통계 및 보고서</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="sidebar-help">
+          <div class="help-icon">i</div>
+          <div><strong>업무 데이터 안내</strong><p>초기 샘플 의뢰는 DEMO로 표시됩니다.</p></div>
+        </div>
+        <div class="user-mini"><div class="avatar">DF</div><div><strong>Lab Workspace</strong><span id="userEmail">계정 확인 중</span></div></div>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" id="mobileMenu" aria-label="메뉴 열기">☰</button>
+        <div class="breadcrumb"><span>DentalFlow</span><b>/</b><strong id="pageTitle">대시보드</strong></div>
+        <div class="topbar-actions">
+          <div class="global-search"><span>⌕</span><input id="globalSearch" placeholder="의뢰번호 또는 치과명 검색" aria-label="전체 검색"><kbd>Enter</kbd></div>
+          <button class="icon-button" id="refreshBtn" title="새로고침" aria-label="새로고침">↻</button>
+          <button class="primary-button" id="newOrderTop"><span>＋</span> 신규 의뢰</button>
+        </div>
+      </header>
+
+      <section class="content">
+        <div id="loadingState" class="loading-panel"><div class="spinner"></div><strong>DentalFlow 데이터를 불러오는 중입니다</strong><span>Google Sheets 연결 상태를 확인하고 있습니다.</span></div>
+        <div id="appContent" hidden>
+          <section class="view active" id="view-dashboard">
+            <div class="page-heading">
+              <div><div class="eyebrow">OVERVIEW</div><h1>작업 현황 대시보드</h1><p>오늘의 제작 흐름과 납기 위험을 한눈에 확인하세요.</p></div>
+              <div class="heading-meta"><span class="live-dot"></span><span id="todayLabel">오늘</span><button class="secondary-button" id="dashboardRefresh">↻ 새로고침</button></div>
+            </div>
+            <div class="stat-grid" id="statCards"></div>
+            <div class="dashboard-grid">
+              <article class="panel process-overview">
+                <div class="panel-heading"><div><h2>공정별 작업 현황</h2><p>현재 등록된 공정의 진행 상태</p></div><button class="text-button" data-go="processes">공정 전체 보기 →</button></div>
+                <div id="processOverview" class="process-overview-list"></div>
+              </article>
+              <article class="panel due-panel">
+                <div class="panel-heading"><div><h2>납기 주의 작업</h2><p>지연 및 2일 이내 마감 예정</p></div><span class="soft-badge warning" id="dueCount">0건</span></div>
+                <div id="dueList" class="compact-list"></div>
+              </article>
+              <article class="panel recent-panel">
+                <div class="panel-heading"><div><h2>최근 등록 의뢰</h2><p>최근 접수된 작업을 확인합니다.</p></div><button class="text-button" data-go="orders">전체 보기 →</button></div>
+                <div id="recentOrders" class="table-wrap"></div>
+              </article>
+              <article class="panel history-panel">
+                <div class="panel-heading"><div><h2>최근 변경 이력</h2><p>작업 상태 및 정보 변경 기록</p></div></div>
+                <div id="recentHistory" class="timeline"></div>
+              </article>
+            </div>
+          </section>
+
+          <section class="view" id="view-orders">
+            <div class="page-heading"><div><div class="eyebrow">ORDER MANAGEMENT</div><h1>작업 의뢰 관리</h1><p>의뢰 등록부터 수정, 상태 변경, 출고 완료까지 관리합니다.</p></div><button class="primary-button" id="newOrderPage">＋ 신규 의뢰 등록</button></div>
+            <div class="panel filters-panel">
+              <div class="filter-search"><span>⌕</span><input id="orderSearch" placeholder="의뢰번호, 치과명, 치아 번호 검색"></div>
+              <select id="filterStatus"><option value="">모든 상태</option><option>접수 대기</option><option>작업 진행 중</option><option>품질검사</option><option>출고 완료</option><option>보류</option></select>
+              <select id="filterRestoration"><option value="">모든 보철물</option><option>크라운</option><option>브리지</option><option>인레이</option><option>온레이</option><option>임플란트 보철</option><option>임시 크라운</option><option>기타</option></select>
+              <select id="filterTechnician"><option value="">모든 담당자</option></select>
+              <input type="date" id="filterDueFrom" aria-label="납기 시작일">
+              <input type="date" id="filterDueTo" aria-label="납기 종료일">
+              <button class="secondary-button" id="clearFilters">초기화</button>
+            </div>
+            <div class="panel table-panel">
+              <div class="table-toolbar"><div><strong>전체 의뢰 목록</strong><span id="orderCount" class="count-pill">0건</span></div><div class="toolbar-right"><label class="sample-toggle"><input type="checkbox" id="hideSamples"> 샘플 데이터 숨기기</label><button class="secondary-button" id="exportOrders">↓ CSV 내보내기</button></div></div>
+              <div id="ordersTable" class="table-wrap"></div>
+            </div>
+          </section>
+
+          <section class="view" id="view-processes">
+            <div class="page-heading"><div><div class="eyebrow">PRODUCTION FLOW</div><h1>제작 공정</h1><p>의뢰별 공정 담당자와 진행 상태를 업데이트합니다.</p></div><div class="heading-meta"><span class="soft-badge info">공정 상태 실시간 반영</span></div></div>
+            <div class="panel filters-panel"><div class="filter-search"><span>⌕</span><input id="processSearch" placeholder="의뢰번호, 치과명, 공정명 검색"></div><select id="processStatusFilter"><option value="">모든 공정 상태</option><option>대기</option><option>진행 중</option><option>완료</option><option>생략</option></select><select id="processTechFilter"><option value="">모든 담당자</option></select></div>
+            <div id="processBoard" class="process-board"></div>
+          </section>
+
+          <section class="view" id="view-schedule">
+            <div class="page-heading"><div><div class="eyebrow">DELIVERY CONTROL</div><h1>납기 및 일정</h1><p>납기일 기준으로 오늘 마감, 임박, 지연 작업을 확인합니다.</p></div><input type="date" id="scheduleDate" class="date-control"></div>
+            <div class="schedule-summary" id="scheduleSummary"></div>
+            <div class="panel table-panel"><div class="table-toolbar"><div><strong>납기 기준 작업 목록</strong><span class="count-pill" id="scheduleCount">0건</span></div><div class="toolbar-right"><select id="scheduleScope"><option value="all">전체 미출고 작업</option><option value="today">선택 날짜 마감</option><option value="overdue">납기 지연</option><option value="soon">2일 이내 마감</option></select></div></div><div id="scheduleTable" class="table-wrap"></div></div>
+          </section>
+
+          <section class="view" id="view-reports">
+            <div class="page-heading"><div><div class="eyebrow">ANALYTICS & REPORTS</div><h1>통계 및 보고서</h1><p>현재 저장된 의뢰와 공정 데이터를 기준으로 산출한 지표입니다.</p></div><button class="secondary-button" id="exportReport">↓ 보고서 CSV 내보내기</button></div>
+            <div id="reportStats" class="stat-grid report-stats"></div>
+            <div class="report-grid"><article class="panel"><div class="panel-heading"><div><h2>상태별 의뢰</h2><p>전체 의뢰 기준</p></div></div><div id="statusChart" class="bar-chart"></div></article><article class="panel"><div class="panel-heading"><div><h2>담당자별 작업 현황</h2><p>담당자 기준 작업 분포</p></div></div><div id="techReport" class="table-wrap"></div></article><article class="panel wide"><div class="panel-heading"><div><h2>공정별 완료 현황</h2><p>공정 상태별 집계</p></div></div><div id="processReport" class="table-wrap"></div></article></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <div class="modal-backdrop" id="orderModal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-header"><div><div class="eyebrow">ORDER DETAILS</div><h2 id="modalTitle">신규 의뢰 등록</h2><p>환자 식별정보는 입력하지 마세요.</p></div><button class="icon-button" id="closeModal" aria-label="닫기">×</button></div>
+      <form id="orderForm">
+        <input type="hidden" id="fOrderId">
+        <div class="form-grid">
+          <label class="field"><span>거래 치과 <b>*</b></span><input id="fClinic" required maxlength="100" placeholder="예: 바른이치과"></label>
+          <label class="field"><span>보철물 종류 <b>*</b></span><select id="fRestoration" required><option value="">선택하세요</option><option>크라운</option><option>브리지</option><option>인레이</option><option>온레이</option><option>임플란트 보철</option><option>임시 크라운</option><option>기타</option></select></label>
+          <label class="field"><span>재료 <b>*</b></span><select id="fMaterial" required><option value="">선택하세요</option><option>지르코니아</option><option>PMMA</option><option>금속</option><option>세라믹</option><option>하이브리드 레진</option><option>기타</option></select></label>
+          <label class="field"><span>치아 번호 / 작업 범위</span><input id="fTooth" maxlength="100" placeholder="예: 11, 35-37"></label>
+          <label class="field"><span>담당 기공사 <b>*</b></span><input id="fTechnician" required maxlength="80" placeholder="담당자 이름 또는 사번"></label>
+          <label class="field"><span>우선순위</span><select id="fPriority"><option>보통</option><option>낮음</option><option>높음</option><option>긴급</option></select></label>
+          <label class="field"><span>접수일 <b>*</b></span><input id="fReceived" type="date" required></label>
+          <label class="field"><span>납기일 <b>*</b></span><input id="fDue" type="date" required></label>
+          <label class="field"><span>작업 상태</span><select id="fStatus"><option>접수 대기</option><option>작업 진행 중</option><option>품질검사</option><option>출고 완료</option><option>보류</option></select></label>
+          <label class="field full"><span>특이사항 및 작업 메모</span><textarea id="fNotes" rows="3" maxlength="1000" placeholder="색상, 교합, 접촉점 등 제작에 필요한 작업 메모"></textarea></label>
+        </div>
+        <div class="privacy-note">🔒 환자 이름, 주민등록번호, 전화번호 등 개인식별정보를 입력하지 마세요.</div>
+        <div class="modal-actions"><button type="button" class="secondary-button" id="cancelModal">취소</button><button type="submit" class="primary-button" id="saveOrderBtn">저장하기</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="detailModal" hidden><div class="modal-card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detailTitle"><div class="modal-header"><div><div class="eyebrow">ORDER WORKFLOW</div><h2 id="detailTitle">의뢰 상세</h2><p id="detailSubtitle"></p></div><button class="icon-button" id="closeDetail" aria-label="닫기">×</button></div><div id="detailBody"></div><div class="modal-actions"><button class="secondary-button" id="detailEdit">수정</button><button class="primary-button" id="detailClose">닫기</button></div></div></div>
+
+  <?!= include('Client'); ?>
+</body>
+</html>
